@@ -1,70 +1,90 @@
-project(HELIX)
 cmake_minimum_required(VERSION 3.4.3)
+project(helix)
 
-# Where is LLVM installed?
-find_package(LLVM CONFIG REQUIRED)
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${LLVM_CMAKE_DIR})
-include(HandleLLVMOptions)
-include(AddLLVM)
+#===============================================================================
+# 1. VERIFY LLVM INSTALLATION DIR
+#===============================================================================
+# Set this to a valid LLVM installation dir
+set(LT_LLVM_INSTALL_DIR "/usr/lib/llvm-10" CACHE PATH "LLVM installation directory")
 
-# Add the llvm header path.
-include_directories(${LLVM_INCLUDE_DIRS})
-
-# Sources available, too?
-execute_process(COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config" --src-root OUTPUT_VARIABLE MAIN_SRC_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-set(LLVM_SOURCE_ROOT ${MAIN_SRC_DIR} CACHE PATH "Path to LLVM source tree")
-
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-include("helix_macros")
-
-set(HELIX_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
-set(HELIX_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
-
-# Add appropriate flags for GCC
-if (CMAKE_COMPILER_IS_GNUCXX)
-  # FIXME: Turn off exceptions, RTTI:
-  # -fno-exceptions -fno-rtti
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-common -Woverloaded-virtual -Wno-long-long -Wall -W -Wno-unused-parameter -Wwrite-strings -fno-exceptions -fno-rtti")
-elseif (MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHs-c-")
-  add_definitions("-D_HAS_EXCEPTIONS=0")
-else ()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions -fno-rtti")
-endif ()
-
-# Add path for custom modules
-# set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${HELIX_SOURCE_DIR}/cmake")
-
-# SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-include_directories(
-  BEFORE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  )
-
-if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
-  install(DIRECTORY include/
-    DESTINATION include
-    FILES_MATCHING
-    PATTERN "*.h"
-    PATTERN ".svn" EXCLUDE
-    )
-
-  install(DIRECTORY ${HELIX_BINARY_DIR}/include/
-    DESTINATION include
-    FILES_MATCHING
-    PATTERN "*.h"
-    PATTERN "CMakeFiles" EXCLUDE
-    PATTERN ".svn" EXCLUDE
-    )
+# A bit of a sanity checking
+set(LT_LLVM_INCLUDE_DIR "${LT_LLVM_INSTALL_DIR}/include/llvm")
+if(NOT EXISTS "${LT_LLVM_INCLUDE_DIR}")
+message(FATAL_ERROR
+  " LT_LLVM_INSTALL_DIR (${LT_LLVM_INCLUDE_DIR}) is invalid.")
 endif()
 
-add_definitions( -D_GNU_SOURCE )
+set(LT_LLVM_CMAKE_FILE "${LT_LLVM_INSTALL_DIR}/lib/cmake/llvm/LLVMConfig.cmake")
+if(NOT EXISTS "${LT_LLVM_CMAKE_FILE}")
+message(FATAL_ERROR
+    " LT_LLVM_CMAKE_FILE (${LT_LLVM_CMAKE_FILE}) is invalid.")
+endif()
 
-#add_subdirectory(docs)
+#===============================================================================
+# 2. LOAD LLVM CONFIGURATION
+#    For more: http://llvm.org/docs/CMake.html#embedding-llvm-in-your-project
+#===============================================================================
+# Add the location of LLVMConfig.cmake to CMake search paths (so that
+# find_package can locate it)
+list(APPEND CMAKE_PREFIX_PATH "${LT_LLVM_INSTALL_DIR}/lib/cmake/llvm/")
+
+find_package(LLVM 10.0.0 REQUIRED CONFIG)
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LT_LLVM_INSTALL_DIR}")
+
+message("LLVM STATUS:
+  Definitions ${LLVM_DEFINITIONS}
+  Includes    ${LLVM_INCLUDE_DIRS}
+  Libraries   ${LLVM_LIBRARY_DIRS}
+  Targets     ${LLVM_TARGETS_TO_BUILD}"
+)
+
+# Set the LLVM header and library paths
+include_directories(SYSTEM ${LLVM_INCLUDE_DIRS})
+link_directories(${LLVM_LIBRARY_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+
+#===============================================================================
+# 3. LLVM-TUTOR BUILD CONFIGURATION
+#===============================================================================
+# Use the same C++ standard as LLVM does
+set(CMAKE_CXX_STANDARD 14 CACHE STRING "")
+
+# Build type
+if (NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE
+      STRING "Build type (default Debug):" FORCE)
+endif()
+
+# Compiler flags
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall\
+    -fdiagnostics-color=always")
+
+# LLVM is normally built without RTTI. Be consistent with that.
+if(NOT LLVM_ENABLE_RTTI)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
+endif()
+
+# -fvisibility-inlines-hidden is set when building LLVM and on Darwin warnings
+# are triggered if llvm-tutor is built without this flag (though otherwise it
+# builds fine). For consistency, add it here too.
+include(CheckCXXCompilerFlag)
+check_cxx_compiler_flag("-fvisibility-inlines-hidden" SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG)
+if (${SUPPORTS_FVISIBILITY_INLINES_HIDDEN_FLAG} EQUAL "1")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility-inlines-hidden")
+endif()
+
+# Set the build directories
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/lib")
+
+#===============================================================================
+# 4. ADD SUB-TARGETS
+# Doing this at the end so that all definitions and link/include paths are
+# available for the sub-projects.
+#===============================================================================
 add_subdirectory(lib)
-#add_subdirectory(test)
-#add_subdirectory(unittests)
-#add_subdirectory(tools)
-#add_subdirectory(cmake)
+add_subdirectory(runtime)
+# add_subdirectory(tools)
+# add_subdirectory(test)
+# add_subdirectory(HelloWorld)
